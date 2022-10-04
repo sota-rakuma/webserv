@@ -1,114 +1,195 @@
+#include "Server.hpp"
 #include <iostream>
-#include <cstdio>
-#include <unistd.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <errno.h>
 
-static int InitSocket()
+Server::Server()
+:_timeout(3000),
+_listensock(),
+_connections()
 {
-	int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-	if (sockfd == -1) {
-		perror("socket");
-		std::exit(1);
-	}
-
-	struct sockaddr_in info;
-	memset(&info, 0, sizeof(info));
-	info.sin_family = AF_INET;
-	info.sin_port = htons(4242);
-	in_addr_t ipaddr = inet_addr("127.0.0.1");
-	if (ipaddr == -1) {
-		std::cerr << "cannot find ip address" << std::endl;
-		close(sockfd);
-	}
-	info.sin_addr.s_addr = ipaddr;
-	if (bind(sockfd, (struct sockaddr *)&info, sizeof(info))) {
-		perror("bind");
-		close(sockfd);
-		std::exit(1);
-	}
-
-	if (listen(sockfd, 100)) {
+	if (_listensock.listen_(100)) {
 		perror("listen");
-		close(sockfd);
 		std::exit(1);
 	}
-	return (sockfd);
+	_pollfd.push_back((pollfd){_listensock.getSockFd(), POLLIN, 0});
 }
 
-static int getsocket()
+Server::Server(int timeout)
+:_timeout(timeout),
+_listensock(),
+_connections()
 {
-	int	fd = socket(AF_INET, SOCK_STREAM, 0);
-	if (fd < 0)
-	{
-		perror("socket");
+	if (_listensock.listen_(100)) {
+		perror("listen");
 		std::exit(1);
 	}
-	return fd;
+	_pollfd.push_back((pollfd){_listensock.getSockFd(), POLLIN, 0});
 }
 
-static int send_back(int client_sock, char *buff)
+Server::Server(const ListenSocket& listensock)
+:_listensock(listensock),
+_connections()
 {
-	if (write(client_sock, buff, strlen(buff) + 1) == -1) {
-		perror("write");
-		return 1;
+	if (_listensock.listen_(100)) {
+		perror("listen");
+		std::exit(1);
 	}
-	return 0;
+	_pollfd.push_back((pollfd){_listensock.getSockFd(), POLLIN, 0});
 }
 
-static int communicate_with_client(int client_sock)
+Server::Server(const ListenSocket& listensock, int timeout)
+:_timeout(timeout),
+_listensock(listensock),
+_connections()
 {
-	char buff[1024];
-	bool is_end = false;
-	size_t nb;
-
-	while ((nb = read(client_sock, buff, 1023)) > 0 || !is_end) {
-		buff[nb] = '\0';
-		std::cout << "from client: " << buff << std::endl;
-		if (strcmp(buff, "EOF") == 0) {
-			strncpy(buff, "bye!", 5);
-			is_end = true;
-		}
-		if (send_back(client_sock, buff)) {
-			return 1;
-		}
-		std::cout << "sent data to client!" << std::endl;
+	if (_listensock.listen_(100)) {
+		perror("listen");
+		std::exit(1);
 	}
-	if (nb < 0) {
-		perror("read");
-		return 1;
-	}
-	return 0;
+	_pollfd.push_back((pollfd){_listensock.getSockFd(), POLLIN, 0});
 }
 
-int main(int argc, char *argv[])
-{
-	int sockfd = InitSocket();
-	struct sockaddr_in client;
-	size_t	cli_sock_len = sizeof(client);
 
-	while (1)
-	{
-		memset(&client, 0, cli_sock_len);
-		int client_fd = accept(sockfd, (struct sockaddr *)&client, (socklen_t *)&cli_sock_len);
-		// 2回目の接続以降のかつ待機中のクライアントがいない場合に、これがないとエラーになる？
+Server::Server(const Server& another)
+:_listensock(another.getListenSock()),
+_connections(another.getConnections()),
+_pollfd(another.getPollfd())
+{
+}
+
+Server::~Server()
+{
+}
+
+const ListenSocket& Server::getListenSock() const
+{
+	return _listensock;
+}
+
+const std::map<int, Connection*> &Server::getConnections() const
+{
+	return _connections;
+}
+
+const std::vector<pollfd> &Server::getPollfd() const
+{
+	return _pollfd;
+}
+
+// if error occur, return -1
+int Server::createConnection()
+{
+	sockaddr_in cli_info;
+	socklen_t len = sizeof(cli_info);
+	pollfd newfd;
+
+	memset(&newfd, 0, sizeof(newfd));
+	newfd.fd = accept(_listensock.getSockFd(), (sockaddr *)&cli_info, &len);
+	if (newfd.fd == -1) {
 		if (errno == EAGAIN || errno == EWOULDBLOCK) {
-			usleep(500);
-			std::cout << "server wait for client" << std::endl;
+			return CONTINUE;
+		}
+		perror("accept");
+		return ERROR;
+	}
+	newfd.events = POLLIN;
+	_pollfd.push_back(newfd);
+	Connection *client = new Connection(newfd.fd, cli_info);
+	_connections.insert(std::make_pair(newfd.fd, client));
+	std::cout << "Create Connection!" << std::endl;
+	return TERMINATED;
+}
+
+void Server::deleteConnection(const poll_vec_it it)
+{
+	int key = it->fd;
+
+	delete _connections[key];
+	_connections.erase(key);
+	_pollfd.erase(it);
+}
+
+void Server::handleError(const poll_vec_it it)
+{
+	if (it->revents & POLLERR) {
+		std::cerr << "Exception happened on device or socket" << std::endl;
+	} else if (it->revents & POLLHUP) {
+		std::cerr << "Connection is disconnected" << std::endl;
+	} else if (it->revents & POLLNVAL) {
+		std::cerr << "fd is not opend" << std::endl;
+	}
+	deleteConnection(it);
+}
+
+int Server::handleOutput(const poll_vec_it it)
+{
+	int ret = _connections[it->fd]->sendResponse();
+	if (ret == TERMINATED) {
+		it->events &= ~POLLOUT;
+	}
+	deleteConnection(it);
+	return ret;
+}
+
+int Server::handleInput(const poll_vec_it it)
+{
+	// createConnectuonのエラー無視
+	if (it == _pollfd.begin()) {
+		return createConnection() & ~ERROR;
+	}
+	int ret = _connections[it->fd]->getRequest();
+	if (ret == TERMINATED
+		|| _connections[it->fd]->getRbuffer().find("\x04")) {
+		if (_connections[it->fd]->createResponse() == ERROR) {
+			return ERROR;
+		}
+		it->events |= POLLOUT;
+	}
+	return ret;
+}
+
+int Server::traversePollfd(int &ready)
+{
+	poll_vec_it it = _pollfd.begin();
+
+	for (; it != _pollfd.end() && ready > 0; it++)
+	{
+		if (it->revents == 0) {
 			continue;
 		}
-		if (client_fd == -1) {
-			perror("accept");
-			close(sockfd);
-			std::exit(1);
+		if (it->revents & (POLLERR | POLLHUP | POLLNVAL)) {
+			handleError(it);
 		}
-		communicate_with_client(client_fd);
-		close(client_fd);
+		else if (it->revents & POLLOUT) {
+			if (handleOutput(it) == ERROR) {
+				handleError(it);
+			}
+		}
+		else {
+			if (handleInput(it) == ERROR) {
+				handleError(it);
+			}
+		}
+		ready--;
 	}
+	return 0;
+}
 
-	close(sockfd);
+int Server::eventMonitor()
+{
+	int ready;
+
+	for (;;)
+	{
+		ready = poll(_pollfd.data(), _pollfd.size(), _timeout);
+		if (ready < 0) {
+			perror("poll");
+			return ERROR;
+		} else if (ready == 0) {
+			std::cout << "waiting event" << std::endl;
+			sleep(1);
+			continue;
+		}
+		traversePollfd(ready);
+	}
 	return 0;
 }

@@ -39,6 +39,7 @@ static int getsocket()
 
 static int send_data(int sockfd, std::string &buff)
 {
+	buff += "\x04";
 	if (write(sockfd, buff.c_str(), buff.size()) == -1) {
 		perror("write");
 		return 1;
@@ -62,8 +63,9 @@ static void communicate_with_server(int sockfd, std::istream &is, std::ostream &
 {
 	std::string buff;
 
-	while (std::getline(is, buff)) {
-		if (send_data(sockfd, buff)) {
+	while (!is.eof()) {
+		std::getline(is, buff);
+		if (is.bad() || send_data(sockfd, buff)) {
 			break;
 		}
 		std::cout << "in client: sent data to server" << std::endl;

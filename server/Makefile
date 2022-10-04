@@ -1,5 +1,6 @@
 CXX:=c++
-CXXFLAGS:=-MMD -MP
+CXXFLAGS:=-MMD -MP --std=c++98 #-fsanitize=address
+#SRCS:=$(wildcard *.cpp)
 SRCS:=$(wildcard *.cpp)
 OBJ_DIR:=obj
 DEP_DIR:=dep
@@ -23,7 +24,7 @@ clean:
 	rm -fR $(OBJ_DIR) $(DEP_DIR)
 
 fclean: clean
-	rm $(NAME)
+	rm -f $(NAME)
 
 re: fclean all
 
