@@ -138,7 +138,7 @@ int Server::handleInput(const poll_vec_it it)
 	}
 	int ret = _connections[it->fd]->getRequest();
 	if (ret == TERMINATED
-		|| _connections[it->fd]->getRbuffer().find("\x04")) {
+		|| _connections[it->fd]->getRbuffer().find("\x04") != std::string::npos) {
 		if (_connections[it->fd]->createResponse() == ERROR) {
 			return ERROR;
 		}

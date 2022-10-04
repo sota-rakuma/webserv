@@ -39,7 +39,6 @@ static int getsocket()
 
 static int send_data(int sockfd, std::string &buff)
 {
-	buff += "\x04";
 	if (write(sockfd, buff.c_str(), buff.size()) == -1) {
 		perror("write");
 		return 1;
@@ -50,9 +49,12 @@ static int send_data(int sockfd, std::string &buff)
 static int get_data(int sockfd, std::ostream &os)
 {
 	char buff[1024];
+	ssize_t nb;
 
-	if (read(sockfd, buff, 1024) < 0) {
-		perror("read");
+	nb = read(sockfd, buff, 1024);
+	if (nb <= 0) {
+		if (nb < 0)
+			perror("read");
 		return 1;
 	}
 	std::cout << "from server: " << buff << std::endl;
@@ -69,14 +71,12 @@ static void communicate_with_server(int sockfd, std::istream &is, std::ostream &
 			break;
 		}
 		std::cout << "in client: sent data to server" << std::endl;
-		if (get_data(sockfd, os)) {
-			break;
-		}
-		std::cout << "get data from server" << std::endl;
 	}
 	if (!is.eof()) {
 		std::cerr << "cannot send message" << std::endl;
 	}
+	write(sockfd, "\x04", 2);
+	while (!get_data(sockfd, os)) ;
 }
 
 int main(int argc, char *argv[])
