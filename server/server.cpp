@@ -132,7 +132,7 @@ int Server::handleOutput(const poll_vec_it it)
 
 int Server::handleInput(const poll_vec_it it)
 {
-	// createConnectuonのエラー無視
+	// createConnectionのエラー無視
 	if (it == _pollfd.begin()) {
 		return createConnection() & ~ERROR;
 	}
